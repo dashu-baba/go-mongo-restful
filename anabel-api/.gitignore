@@ -1,0 +1,9 @@
+.DS_Store
+backend
+config.yaml
+go.sum
+.idea
+test.go
+build.sh
+/.vscode
+build-*.sh

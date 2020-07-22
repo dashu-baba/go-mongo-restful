@@ -1,0 +1,27 @@
+server:
+  listen: 0.0.0.0:4201
+
+mongodb:
+  url: mongodb://localhost:27017/anabel
+
+aws:
+  access_key_id: aws_key_id
+  secret_access_key: secret_access_key
+  s3_region: ap-northeast-1
+  s3_bucket: anabel-images-bucket
+app:
+  token_validation_period_in_minutes: 60
+  forntend_url : "localhost:4001"
+email:
+  sender: sender@example.com
+  activation_subject: Please activate your account
+  activation_body: <h1>Account Activation</h1><p>This email was sent with 
+                      <a href='https://aws.amazon.com/ses/'>Amazon SES</a> using the
+                      <a href='https://aws.amazon.com/sdk-for-go/'>AWS SDK for Go</a>.</p>
+                      <p>Please activate your account by clicking the following link 
+                      <a href='{{url}}'>Activate</a></p>
+log:
+  file: logrus.log
+  level: debug
+
+                      

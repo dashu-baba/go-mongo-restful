@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+    anabel-api:
+        build: .
+        command: ./anabel.exe
+        ports:
+            - '4201:4201'
+            - '4001:4001'

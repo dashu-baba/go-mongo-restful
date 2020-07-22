@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+    anabel-api:
+        build: .
+        command: go run main.go
+        volumes:
+            - '.:/opt/app/'
+        ports:
+            - '4201:4201'
+            - '4001:4001'
+        depends_on:
+            - backend-mongo
+    backend-mongo:
+        image: mongo
+        restart: on-failure
+        volumes:
+            - 'database_vol:/data/db'
+        ports:
+            - '27017:27017'
+volumes:
+    database_vol: null

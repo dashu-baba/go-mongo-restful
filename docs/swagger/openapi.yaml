@@ -1,0 +1,1993 @@
+openapi: "3.0.0"
+info:
+  title: Anabel Hospitality IoT Alert System Rest API
+  description: |
+    <b>Permissions:</b> one user maybe have different permissions
+      - AnabelSuperAdmin (SA), Full access to all data and user interface of the web app
+      - AnabelAccountManager (AM), Same as SA, but with access to specific clients only
+      - ClientSuperAdmin (CSA), Full access to all the data specific to one client
+      - ClientGroupAdmin (GA), 
+        - Access to the actual individual user credentials only
+        - Full access to multiple sites, but only the sites in their named group
+      - SiteManager (SM)
+        - No client-level data access
+        - No site address and site physical attributes
+        - Full access to a single site operational data
+      - SiteUser (SU)
+        - Read access to site data
+        - Mainly an operator of the system with no write access except for their specific credentials
+    
+    <b>Endpoint permissions implementation:</b> the permission checker should in middleware, or at least in a common method, and easy use for new endpoint
+    
+      1. endpoints in this swagger already contains roles
+      2. according the the login user permissions, check if the user has permission to access this endpoint
+      3. double check "Ch 4 - UserEntitlements.pdf", check if the user has permission to update fields
+      
+    
+    <b>Notification generate:</b> 
+      - client/site create/delete should generate notification
+      
+    <b> Pagination: </b>
+      - only client,site,users,global search endpoints need support pagination/search/sort in backend, other like client.contacts etc, pagination should support in frontend
+      
+    <b>accessToken:</b>
+      - use JWT for security access token
+      - when generate jwt token in login endpoint, encode role and user id, email, permissions, clientid, siteId into accessToken(payload object), those information will used for permission check
+      
+  version: "1.0"
+servers:
+- url: /api/{apiVersion}/
+  variables:
+    apiVersion:
+      default: 'v1'
+      description: The REST API version
+security:
+- bearerAuth: []
+
+paths:
+  /login:
+    post:
+      summary: login
+      description: |
+        This endpoint will be used to perform login
+      tags:
+      - Security
+      requestBody:
+        description: login request
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - account
+              - password
+              properties:
+                account:
+                  description: The user email or username
+                  type: string
+                password:
+                  description: the password
+                  type: string
+      security: []
+      responses:
+        200:
+          description: |
+            Authentication response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+                  accessToken:
+                    type: string
+                    description: the token
+                    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
+                  accessTokenExpiredAt:
+                    type: string
+                    format: time
+                    description: the token expired time
+                    example: '2019-01-10T07:10:34.623Z'
+
+        400:
+          $ref: '#/components/responses/BadRequest'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /logout:
+    post:
+      summary: log out.
+      description: |
+        logging out. It requires authentication.
+      tags:
+      - Security
+      responses:
+        204:
+          description: Successfully logged out.
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /initiate-forgot-password:
+    post:
+      summary: forgort password
+      description: |
+        send an email to this email address, the content should same as create user email
+      tags: 
+        - Security
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              properties:
+                email:
+                  description: The email
+                  type: string
+      responses:
+        204:
+          description: OK
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /change-password:
+    post:
+      summary: reset password by old password
+      tags: 
+        - Security
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - oldPassword
+              - newPassword
+              properties:
+                oldPassword:
+                  description: The old password
+                  type: string
+                newPassword:
+                  description: The new password
+                  type: string
+      responses:
+        204:
+          description: OK
+        400:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /user-confirmation:
+    put:
+      summary: user confirmation by token
+      description: |
+        - check confirmation token is invalid or not
+        - update user profile
+        - update user password
+      tags: 
+        - Security
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                siteGroupName:
+                  type: string
+                position:
+                  type: string
+                password:
+                  type: string
+                phone:
+                  type: string
+                notificationPreference:
+                  type: string
+      responses:
+        204:
+          description: OK
+        400:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /me:
+    get:
+      summary: get me
+      tags:
+        - User
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /users:
+    post:
+      summary: create User, SA,AM,CSA,GA,SM
+      description: |
+        - when user created, an email send to user (include link that used to Confirmation) 
+        - siteId is required for GA,SM
+        - permissions need generate by (adminUserType,groupAdminSites) / siteUserType
+        - client/site numberOfUsers need recalculate
+      tags: 
+        - User
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+      responses:
+        204: 
+          description: OK
+        400:
+          $ref: '#/components/responses/BadRequest'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      summary: search user (manager only)
+      tags: 
+        - User
+      parameters:
+      - $ref: '#/components/parameters/page'
+      - $ref: '#/components/parameters/perPage'
+      - name: sortBy
+        in: query
+        description: The sort order
+        required: false
+        schema:
+          type: string
+          enum: [status,username,email,role]
+      - $ref: '#/components/parameters/sortOrder'
+      - name: status
+        in: query
+        description: the user status
+        required: false
+        schema:
+          type: string
+      - name: role
+        in: query
+        description: the user role
+        required: false
+        schema:
+          type: string
+      - name: keyword
+        in: query
+        description: search by username and email, should be fuzzing match and ignore case
+        schema:
+          type: string
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  total:
+                    type: integer
+                    description: the total of count
+                    example: 35
+                  page:
+                    type: integer
+                    example: 1
+                  size:
+                    type: integer
+                    example: 20
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /users/{id}:
+    parameters:
+    - $ref: '#/components/parameters/id'
+    put:
+      summary: update user, SA,AM,CSA,GA,SM
+      description: |
+        - for siteGroupName, only SA,AM,CSA,GA can update, GA can only update self siteGroupName
+      tags: 
+        - User
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                siteGroupName:
+                  type: string
+                position:
+                  type: string
+                phone:
+                  type: string
+                notificationPreference:
+                  type: string
+                email:
+                  type: string
+                firstName:
+                  type: string
+                familyName:
+                  type: string
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: delete use, SA,AM,CSA,GA,SM
+      description: |
+        - the numberOfUsers in site/client need update
+      tags: 
+       - User
+      responses:
+        204:
+          description: OK
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      summary: get user by id
+      tags: 
+       - User
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+      
+  /clients:
+    post:
+      summary: create client, SA
+      description: | 
+        create client
+      tags: 
+        - Client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                logoUrl:
+                  type: string
+      responses:
+        200: 
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      summary: search clients, SA,AM,CSA
+      tags: 
+        - Client
+      parameters:
+      - $ref: '#/components/parameters/page'
+      - $ref: '#/components/parameters/perPage'
+      - name: sortBy
+        in: query
+        description: The sort order
+        required: false
+        schema:
+          type: string
+          enum: [uid,name,numberOfSites,numberOfUsers,numberAlerts]
+      - $ref: '#/components/parameters/sortOrder'
+      - name: status
+        in: query
+        description: the client status, default value is active
+        required: false
+        schema:
+          type: string
+          default: 'active'
+          example: 'active'
+      - name: keyword
+        in: query
+        description: search by uid, name, fullAddress
+        schema:
+          type: string
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: '#/components/schemas/Id'
+                        uid:
+                          $ref: '#/components/schemas/UID'
+                        logoUrl:
+                          type: string
+                          example: 'http://aws.s3/xx/xx/x.png'
+                        name:
+                          type: string
+                        fullAddress:
+                          readOnly: true
+                          type: string
+                          example: '5218 Patrick Rd, Verona, NY 13478, United States'
+                        numberOfAlerts:
+                          readOnly: true
+                          type: number
+                          description: the total of alerts for this client
+                        numberOfUsers:
+                          readOnly: true
+                          type: number
+                          description: the total of users for this client
+                        numberOfSites:
+                          readOnly: true
+                          type: number
+                          description: the total of sites for this client
+                        address:
+                          $ref: '#/components/schemas/Address'
+                  total:
+                    type: integer
+                    description: the total of count
+                    example: 35
+                  pageNumber:
+                    type: integer
+                    example: 1
+                  pageSize:
+                    type: integer
+                    example: 20
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    get:
+      summary: get client, SA, AM, CSA
+      description: |
+        - return details client informaton
+      tags: 
+        - Client
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      summary: update client, SA,AM,CSA
+      description: |
+        - for AM user, only client id in permission are matched can update this
+        - support partially update, for example: request body maybe only contains `configuration` part
+      tags: 
+        - Client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Client'
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: delete client, SA,AM,CSA
+      description: |
+        delete all users and all sites
+      tags: 
+        - Client
+      responses:
+        204:
+          description:  OK
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/archive:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    put:
+      summary: archive client, SA,AM,CSA
+      description: |
+        - change client status to archive, and archive client not show in search client endpoint
+        - find all user under this client, then remove token from this user in db, and update user status to inactive
+      tags: 
+        - Client
+      responses:
+        204:
+          description: OK
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/site-groups:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    get:
+      summary: get site groups, SA,AM,CSA
+      description: |
+        - fetch all user that role is GA and clientId is reuqest client id, then return id and siteGroupName, site will use this id groupAdminId 
+      tags: 
+        - Client
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  siteGroupName:
+                    type: string
+
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/user-groups:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    get:
+      summary: get user groups, SA,AM,CSA
+      description: |
+        - fetch all user group in this client, and enable = true
+      tags: 
+        - Client
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  name:
+                    type: string
+
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/sites:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    post:
+      summary: create site, SA,AM,CSA
+      description: | 
+        - the number of sites in client need add one
+      tags: 
+        - Site
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                logoUrl:
+                  type: string
+      responses:
+        200: 
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      summary: search sites, SA,AM,CSA,GA
+      tags: 
+        - Site
+      parameters:
+      - $ref: '#/components/parameters/page'
+      - $ref: '#/components/parameters/perPage'
+      - name: sortBy
+        in: query
+        description: The sort order
+        required: false
+        schema:
+          type: string
+          enum: [uid,name,numberOfUsers,numberAlerts]
+      - $ref: '#/components/parameters/sortOrder'
+      - name: keyword
+        in: query
+        description: search by uid, name, fullAddress
+        schema:
+          type: string
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: '#/components/schemas/Id'
+                        uid:
+                          $ref: '#/components/schemas/UID'
+                        logoUrl:
+                          type: string
+                          example: 'http://aws.s3/xx/xx/x.png'
+                        name:
+                          type: string
+                        fullAddress:
+                          readOnly: true
+                          type: string
+                          example: '5218 Patrick Rd, Verona, NY 13478, United States'
+                        numberOfAlerts:
+                          readOnly: true
+                          type: number
+                          description: the total of alerts for this client
+                        numberOfUsers:
+                          readOnly: true
+                          type: number
+                          description: the total of users for this client
+                        address:
+                          $ref: '#/components/schemas/Address'
+                  total:
+                    type: integer
+                    description: the total of count
+                    example: 35
+                  pageNumber:
+                    type: integer
+                    example: 1
+                  pageSize:
+                    type: integer
+                    example: 20
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/sites/{siteId}:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    - name: siteId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    get:
+      summary: get Site, SA,AM,CSA,GA,SM,SU
+      description: |
+        - return details site informaton
+      tags: 
+        - Site
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      summary: update site, SA,AM,CSA,GA,SM
+      description: |
+        - support partially update
+        - when options.TVTheftPreventionMessage.value changed, use https://aws.amazon.com/polly/ convert value to audio, then upload to s3, update audioUrl
+      tags: 
+        - Site
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Site'
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: delete site, SA,AM,CSA,GA
+      tags: 
+        - Site
+      responses:
+        204:
+          description:  OK
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/sites/{siteId}/import-rooms:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    - name: siteId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    post:
+      summary: import rooms, SA,AM,CSA,GA
+      description: |
+        - import rooms for site from csv file, should replace ones that matches and insert new ones
+      tags: 
+        - Site
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                csvFileName:
+                  type: string
+                  format: binary
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteWithUserDetails'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /clients/{clientId}/sites/{siteId}/export-rooms:
+    parameters:
+    - name: clientId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    - name: siteId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    get:
+      summary: export rooms to csv, SA,AM,CSA,GA,SM,SU
+      description: |
+        - export rooms as csv file
+      tags: 
+        - Site
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /files:
+    post:
+      summary: upload file
+      description: |
+        - update file to s3, and return full url
+        - should support multiple files
+        - append timestamp + random to aws Object Key to avoid overwriting existing file
+        - let s3 bucket public
+      tags:
+        - File
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                fileName:
+                  type: string
+                  format: binary
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: 
+                      type: string
+                      example: 'fileName'
+                    url:
+                      type: string
+                      example: 'http://aws.s3.com/xxx-xxx-xxx.file'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /alerts:
+    get:
+      summary: search alerts
+      description: |
+        - for AM,CSA, clientId is required, and only clientId in permissions can request
+        - for GA,SM,SU, siteId is required, and only siteId in permissions can request
+      tags: 
+        - Alert
+      parameters:
+      - $ref: '#/components/parameters/page'
+      - $ref: '#/components/parameters/perPage'
+      - name: sortBy
+        in: query
+        description: The sort order
+        required: false
+        schema:
+          type: string
+          enum: [jobName,status,location,jobAge,priority]
+      - $ref: '#/components/parameters/sortOrder'
+      - name: clientId
+        in: query
+        description: the client id
+        required: false
+        schema:
+          type: string
+      - name: siteId
+        in: query
+        description: the site id
+        required: false
+        schema:
+          type: string
+      - name: status
+        in: query
+        description: the alert status
+        required: false
+        schema:
+          type: string
+      - name: type
+        in: query
+        description: the alert type
+        required: false
+        schema:
+          type: string
+      - name: alertTime
+        in: query
+        description: |
+          retrun alert time > query.alertTime, for example: Last 24 hours Alerts
+        schema:
+          type: string
+          format: time
+      - name: short
+        in: query
+        description: | 
+          - return fields (jobName, status, alertTime, description), 
+          - don't return metadata
+        schema:
+          type: boolean
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    description: the total of alert by current filter
+                    example: 24
+                  totalOfCleared:
+                    type: integer
+                    description: the total of alert by current filter and status = Cleared
+                    example: 10
+                  metadata:
+                    type: object 
+                    properties:
+                      totalOfSummary:
+                        type: integer
+                        example: 24
+                      totalOfStaffAlert:
+                        type: integer
+                        example: 8
+                      totalOfNotification:
+                        type: integer
+                        example: 8
+                      totalOfSystemAlert:
+                        type: integer
+                        example: 8
+                      new:
+                        type: integer
+                        example: 0
+                      active:
+                        type: integer
+                        example: 7
+                      cleared:
+                        type: integer
+                        example: 1
+                  pageNumber:
+                    type: integer
+                    example: 1
+                  pageSize:
+                    type: integer
+                    example: 20
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Alert'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /alerts/{alertId}:
+    parameters:
+    - name: alertId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    put:
+      summary: update alert
+      description: |
+        - when status = Active, assignedTo is required
+        - when status = Cleared, reason and detailed is required
+      tags: 
+        - Alert
+      requestBody:
+        description: login request
+        content:
+          application/json:
+            schema:
+              type: object
+              required: 
+                - status
+              properties:
+                assignedTo:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Id'
+                status:
+                  type: string
+                  description: the alert status
+                reason:
+                  type: string
+                  description: the cleared reason
+                detailed:
+                  type: string
+                  description: the detailed explanation
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /devices-statistics:
+    get:
+      summary: get devices statistics
+      description: |
+        - get name,description,amount from site.configration
+        - get installed,active from devCom API (current is missing)
+      tags: 
+        - Alert
+      parameters:
+      - name: siteId
+        in: query
+        description: the siteId id
+        required: true
+        schema:
+          type: string
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      example: AN00100
+                    description:
+                      type: string
+                      example: Power Cord gateway
+                    amount:
+                      type: number
+                      example: 30
+                    installed:
+                      type: number
+                      example: 21
+                    active:
+                      type: number
+                      example: 11
+                    
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/NotAuthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /notifications:
+    get:
+      summary: get notifications
+      description: |
+        only return notifications where receiverId = current logged in user id
+      tags: 
+      - Notification
+      parameters: 
+      - $ref: '#/components/parameters/page'
+      - $ref: '#/components/parameters/perPage'
+      - name: sortBy
+        in: query
+        description: The sort order
+        required: false
+        schema:
+          type: string
+          enum: [createdAt]
+      - $ref: '#/components/parameters/sortOrder'
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+                  total:
+                    type: integer
+                    description: the total of count
+                    example: 35
+                  pageNumber:
+                    type: integer
+                    example: 1
+                  pageSize:
+                    type: integer
+                    example: 20
+        400:
+          $ref: '#/components/responses/BadRequest'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+  /global-search:
+    get:
+      summary: global search
+      description: |
+        this search should follow role rules, the mean this endpoint should not return resource that user no permission request 
+        - for SA,AM, search type can be 'client','site','user','alert'
+        - for CSA,GA, search type can be 'site','user','alert'
+        - for SM,SU, search type can be 'user','alert'
+        - query database one time for each resource type, then merge(sort by name and order by asc) and paginate
+      tags: 
+      - Global Search
+      parameters: 
+      - $ref: '#/components/parameters/page'
+      - $ref: '#/components/parameters/perPage'
+      - name: keyword
+        in: query
+        description: the keyword, match by client/site name, user first/family name, alert jobName
+        required: false
+        schema:
+          type: string
+      - name: type
+        in: query
+        description: the resource type
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+            enum: ['client','site','user','alert']
+      responses:
+        200:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: 
+                          type: string
+                        itme:
+                          type: object
+                          description: the resource type
+                  total:
+                    type: integer
+                    description: the total of count
+                    example: 35
+                  pageNumber:
+                    type: integer
+                    example: 1
+                  pageSize:
+                    type: integer
+                    example: 20
+        400:
+          $ref: '#/components/responses/BadRequest'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/InternalServerError'
+components:
+  #-------------------------------
+  # Security schemes
+  #-------------------------------
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  #-------------------------------
+  # Parameters
+  #-------------------------------
+  parameters:
+    page:
+      name: pageNumber
+      in: query
+      description: The page number.
+      required: false
+      schema:
+        type: integer
+        default: 1
+      example: 1
+
+    perPage:
+      name: pageSize
+      in: query
+      description: The number of items to list per page.
+      required: false
+      schema:
+        type: integer
+        default: 20
+        maximum: 100
+      example: 20
+
+    sortOrder:
+      name: sortOrder
+      in: query
+      description: The sort order.
+      required: false
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: desc
+      example: asc
+
+    id:
+      name: id
+      in: path
+      description: The entity id.
+      required: true
+      schema:
+        type: string
+      example: 507f191e810c19729de860ea
+
+
+  #-------------------------------
+  # Responses
+  #-------------------------------
+  responses:
+    NotModified:
+      description: NOT MODIFIED - if the resource wasn't modified (for conditional request with If-Modified-Since header).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequest:
+      description: BAD REQUEST - if there was problem with the request (e.g. malformed or some parameters are missing).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotAuthorized:
+      description: NOT AUTHORIZED - if the request didn't bear authentication information or the authentication information is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: FORBIDDEN - if the requesting user didn't have permission to perform the requested operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: NOT FOUND - if the resource in request did not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalServerError:
+      description: INTERNAL SERVER ERROR - if the request was properly formatted, but the operation failed on the server side
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  #-------------------------------
+  # Entities
+  #-------------------------------
+  schemas:
+    Id:
+      type: string
+      format: uuid
+      readOnly: true
+      description: The DB entity id.
+      example: '507f1f77bcf86cd799439011'
+    UID:
+      type: number
+      readOnly: true
+      description: |
+        - The unique number id, only used for readable in frontend
+        - this uid should be auto generate in backend
+      example: 12345
+    Error:
+      description: |
+        An error entity.
+      properties:
+        message:
+          type: string
+          description: The error message.
+    Notification:
+      description: the notification entity
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        receiverId:
+          type: number
+          description: the receiver user id
+        type:
+          type: string
+          enum: ['client','site','alert']
+          description: the notification types
+        entityId:
+          type: number
+          description: the related entity id
+          example: 12
+        title:
+          type: string
+          description: the notification title
+        createdAt:
+          type: string
+          format: time
+          description: the create time
+          example: '2019-01-10T07:10:34.623Z'
+        updatedAt:
+          type: string
+          format: time
+          description: the update time
+          example: '2019-01-10T07:10:34.623Z'
+    User:
+      description: |
+        The User entity.
+      required:
+      - email
+      - username
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        email:
+          type: string
+          description: the email address, must be unique
+          example: "email@gmail.com"
+        permissions:
+          readOnly: true
+          type: array
+          description: the user permission
+          items:
+            type: object
+            properties:
+              role: 
+                type: string
+                example: 'CA'
+              scopes:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    resource:
+                      type: array
+                      items:
+                        type: string
+                      example: ['client', 'site']
+                    ids:
+                      type: array
+                      items:
+                        type: string
+                        example: '507f1f77bcf86cd799439011'
+        status:
+          readOnly: true
+          type: string
+          enum: [inactive, active, noAccess]
+          example: 'active'
+          description: |
+            - the user status, inactive mean suspended
+            - noAccess mean no permission login, like Staff User, Contact
+        firstName:
+          type: string
+          description: the user first name
+        familyName:
+          type: string
+          description: the user family name
+        profileUrl:
+          type: string
+          format: url
+          description: the profile url
+        position:
+          type: string
+          description: the user position]
+        phone: 
+          type: string
+          description: the phone number
+        notificationPreference:
+          type: string
+          enum: ['phone','email']
+        userGroups:
+          type: array
+          items:
+            type: string
+          description: the site user group, when site create user, this field should update
+        siteId:
+          type: string
+        siteTagId:
+          type: number
+          description: the site user tag id, only used in site
+        siteUserType:
+          type: string
+          description: the user type only for site user
+        adminUserType:
+          type: string
+          description: the user type only for client
+        siteGroupName:
+          type: string
+          description: the site group name, only for GA
+        clientId:
+          type: string
+        createdOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The created on date.
+          example: '2019-01-10T07:10:34.623Z'
+        updatedOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The updated on date.
+          example: '2019-01-10T07:10:34.623Z'
+        lastLoginOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The last login date.
+          example: '2019-01-10T07:10:34.623Z'
+    Address:
+      required: 
+        - line1
+        - city
+        - state
+        - zip
+        - phone1
+      properties:
+        line1:
+          type: string
+        line2:
+          type: string
+        city: 
+          type: string
+        state:
+          type: string
+        zip: 
+          type: string
+        phone1:
+          type: string
+        phone2:
+          type: string
+    ConfigurationFunctionalitySelection:
+      properties:
+        suspendClientAccess:
+          type: boolean
+        staffAlert:
+          type: boolean
+        TVTheftPrevention:
+          type: object
+          properties:
+            label:
+              type: string
+              example: 4 months
+            start:
+              type: string
+              example: 07/13/20
+            end:
+              type: string
+              example: 07/13/20
+        analyticsLevel1:
+          type: object
+          properties:
+            label:
+              type: string
+              example: 4 months
+            start:
+              type: string
+              example: 07/13/20
+            end:
+              type: string
+              example: 07/13/20
+        futureModules:
+          type: array
+          items:
+            type: string
+            example: 'Asset tracking'
+    Configuration:
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        FS:
+          description: Functionality Selection
+          $ref: '#/components/schemas/ConfigurationFunctionalitySelection'
+        TFS:
+          type: object
+          description: Trial Functionality Selection
+          $ref: '#/components/schemas/ConfigurationFunctionalitySelection'
+        requiredDevice:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: AN00100
+              description:
+                type: string
+                example: Power Cord gateway
+              amount:
+                type: number
+                example: 20
+                
+                
+    ManagementSystem:
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name: 
+          type: string
+    SiteOption:
+      type: object
+      properties:
+        label: 
+          type: string
+          example: 'Staff Alert Distress Update'
+        value: 
+          type: number
+        unit:
+          type: string
+        enable: 
+          type: boolean
+    Site:
+      description: the site schema
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        uid:
+          $ref: '#/components/schemas/UID'
+        clientId:
+          readOnly: true
+          description: the belongs client id
+          $ref: '#/components/schemas/Id'
+        groupAdminId:
+          $ref: '#/components/schemas/UID'
+        name:
+          type: string
+          description: the site name
+        logoUrl:
+          type: string
+          description: the logo url
+        address:
+          $ref: '#/components/schemas/Address'
+          description: the site address
+        fullAddress:
+          type: string
+          readOnly: true
+          description: | 
+            - the full address string, for each update address, backend should auto update this
+            - the field used for filter by address
+          example: '5218 Patrick Rd, Verona, NY 13478, United States'
+        details:
+          type: object
+          properties:
+            building:
+              type: number
+              description: the building number
+            room:
+              type: number
+              description: the total of room number
+            managementSystem:
+              type: string
+              description: PROPERTY MANAGEMENT SYSTEM USED
+            wifi:
+              type: array
+              items:
+                type: object
+                properties:
+                  ssid:
+                    type: string
+                  password:
+                    type: string
+            floorPlan:
+              type: array
+              items:
+                type: object
+                properties:
+                  url:
+                    type: string
+                  name:
+                    type: string
+        rooms:
+          type: array
+          items:
+            type: object
+            properties:
+              room:
+                type: number
+              phomeNumber:
+                type: string
+              floor:
+                type: string
+              building:
+                type: string
+        team:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+        notificationSetup:
+          type: array
+          items:
+            type: object
+            properties:
+              id: 
+                type: string
+                description: the group id
+              name: 
+                type: string
+                description: the group name
+              staffAlert:
+                type: boolean
+              notifications:
+                type: boolean
+              systemAlert:
+                type: boolean
+        configuration:
+          $ref: '#/components/schemas/Configuration'
+        options:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/SiteOption'
+            TVTheftPreventionMessage:
+              type: object
+              properties:
+                value: 
+                  type: string
+                description: 
+                  type: string
+                audioUrl: 
+                  type: string
+        createdOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The created on date.
+          example: '2019-01-10T07:10:34.623Z'
+        updatedOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The updated on date.
+          example: '2019-01-10T07:10:34.623Z'
+    SiteWithUserDetails:
+      description: the site with team details
+      allOf:
+        - $ref: '#/components/schemas/Site'
+        - type: object
+          properties:
+            detailTeam:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  firstName:
+                    type: string
+                  familyName:
+                    type: string
+                  profileUrl:
+                    type: string
+                    format: url
+                    description: the profile url
+                  position:
+                    type: string
+                  phone:
+                    type: string
+                  siteUserType:
+                    type: string
+                  siteTagId:
+                    type: string
+                  notificationPreference:
+                    type: string
+                  siteUserGroup:
+                    type: array
+                    items:
+                      type: string
+    SimpleUser:
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        email:
+          type: string
+          description: the email address, must be unique
+          example: "email@gmail.com"
+        firstName:
+          type: string
+          description: the user first name
+        familyName:
+          type: string
+          description: the user family name
+        profileUrl:
+          type: string
+          format: url
+          description: the profile url
+    Alert:
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        siteId:
+          $ref: '#/components/schemas/Id'
+        clientId:
+          $ref: '#/components/schemas/Id'
+        status:
+          type: string
+          enum: ['New','Active','Cleared']
+          description: the alert status
+        type: 
+          type: string
+          enum: ['Staff Alert','Notification','System Alert']
+          description: the alert type
+        assignedTo:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimpleUser'
+        siteManager:
+          description: the site manager who update assigned to
+          $ref: '#/components/schemas/SimpleUser'
+        priority:
+          type: string
+          enum: ['High','Low','Medium']
+          description: the alert priority
+        location:
+          type: string
+          description: the room number or other place
+        jobName:
+          type: string
+          description: the alert name
+          example: 'STA002'
+        description:
+          type: string
+          description: the alert description
+          example: 'enter unused room'
+        jobAge:
+          type: number
+          description: the job age, unit is second
+        staffId:
+          type: string
+          description: the staff id
+        alertTime:
+          type: string
+          description: the alert create time
+          example: '2020-07-13T12:48:11.623Z'
+        assginTime:
+          type: string
+          description: the alert create time
+          example: '2020-07-13T12:48:11.623Z'
+        clearTime:
+          type: string
+          description: the clear time
+          example: '2020-07-13T12:48:11.623Z'
+    Client:
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        uid:
+          $ref: '#/components/schemas/UID'
+        logoUrl:
+          type: string
+          example: 'http://aws.s3/xx/xx/x.png'
+        name:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+          description: the client address
+        fullAddress:
+          readOnly: true
+          type: string
+          description: | 
+            - the full address string, for each update address, backend should auto update this
+            - the field used for filter by address
+          example: '5218 Patrick Rd, Verona, NY 13478, United States'
+        billingAddress:
+          $ref: '#/components/schemas/Address'
+          description: billing address, null mean billing address same as address
+        numberOfAlerts:
+          readOnly: true
+          type: number
+          description: the total of alerts for this client
+        numberOfUsers:
+          readOnly: true
+          type: number
+          description: the total of users for this client
+        numberOfSites:
+          readOnly: true
+          type: number
+          description: the total of sites for this client
+        adminUsers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+        configuration:
+          $ref: '#/components/schemas/Configuration'
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              id: 
+                type: string
+                description: the group id
+              name: 
+                type: string
+                description: the group name
+              enable:
+                type: boolean
+                description: is checked or not
+              staffAlert:
+                type: boolean
+              notifications:
+                type: boolean
+              systemAlert:
+                type: boolean
+        status:
+          readOnly: true
+          type: string
+          enum: ['active','archive']
+          default: active
+        createdOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The created on date.
+          example: '2019-01-10T07:10:34.623Z'
+        updatedOn:
+          readOnly: true
+          type: string
+          format: date
+          description: The updated on date.
+          example: '2019-01-10T07:10:34.623Z'
+    ClientWithUserDetails:
+      description: the client with admin user and contact details
+      allOf:
+        - $ref: '#/components/schemas/Client'
+        - type: object
+          properties:
+            detailContacts:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  firstName:
+                    type: string
+                  familyName:
+                    type: string
+                  profileUrl:
+                    type: string
+                    format: url
+                    description: the profile url
+                  position:
+                    type: string
+                  phone:
+                    type: string
+            adminDetailUsers:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  firstName:
+                    type: string
+                  familyName:
+                    type: string
+                  profileUrl:
+                    type: string
+                    format: url
+                    description: the profile url
+                  position:
+                    type: string
+                  adminUserType:
+                    type: string
+                  phone:
+                    type: string
+      
